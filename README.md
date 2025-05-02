@@ -1,1 +1,1 @@
-[logo](./logo.png)
+![Olympia logo](./logo.png)
