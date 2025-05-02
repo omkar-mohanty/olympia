@@ -1,0 +1,12 @@
+[package]
+name = "olympia_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+goblin = "0.9.3"
+thiserror = "2.0.12"
+log = "0.4.27"
+
+[dev-dependencies]
+env_logger = "0.11.8"
