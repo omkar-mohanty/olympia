@@ -7,7 +7,7 @@ edition = "2024"
 goblin = "0.9.3"
 thiserror = "2.0.12"
 log = "0.4.27"
-petgraph = { version = "0.8.1", features = ["rayon"] }
+petgraph = { version = "0.8", features = ["rayon"] }
 uuid = {version = "1.16.0", features = ["v4"]}
 
 [dev-dependencies]

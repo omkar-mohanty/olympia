@@ -1,11 +1,16 @@
-use goblin::{Object, elf::Elf, error};
-use petgraph::{Directed, graph::Graph};
-use std::{borrow::Cow, fs, io, path::Path};
+use goblin::{
+    Object,
+    elf::{self, Elf},
+    error,
+};
+use petgraph::{graph::NodeIndex, prelude::StableGraph};
+use std::{borrow::Cow, collections::HashMap, fs, io, path::Path};
 use thiserror::Error;
 use uuid::Uuid;
-
+#[derive(Clone, Copy, Debug)]
 pub struct Function {}
 
+#[derive(Clone, Debug)]
 pub enum Rvalue {
     /// Undefined value of unknown length
     Undefined,
@@ -36,6 +41,7 @@ impl Rvalue {
 }
 
 /// Node of the program call
+#[derive(Clone, Debug)]
 pub enum CallTarget {
     /// Reference to external function
     Symbolic(String, Uuid),
@@ -45,16 +51,31 @@ pub enum CallTarget {
     Todo(Rvalue, Option<String>, Uuid),
 }
 
+/// The type of Call used by the function
+#[derive(Clone, Debug)]
+pub enum CallKind {
+    /// Not yet disassembled
+    Unresolved,
+    /// Conditional call via if statements, while etc
+    Conditional,
+    /// Goto statements
+    Unconditional,
+    /// Function calls
+    Call,
+}
+
 pub struct Program {
     uuid: Uuid,
-    call_graph: Graph<CallTarget, Directed>,
+    call_graph: StableGraph<CallTarget, CallKind>,
+    symbol_table: HashMap<Uuid, NodeIndex>,
 }
 
 impl Program {
     pub fn new() -> Self {
         Program {
             uuid: Uuid::new_v4(),
-            call_graph: Graph::new(),
+            call_graph: StableGraph::new(),
+            symbol_table: HashMap::new(),
         }
     }
 
@@ -62,14 +83,26 @@ impl Program {
         self.uuid
     }
 
-    pub fn call_graph(&mut self) -> &mut Graph<CallTarget, Directed> {
+    pub fn call_graph(&self) -> &StableGraph<CallTarget, CallKind> {
+        &self.call_graph
+    }
+
+    pub fn call_graph_mut(&mut self) -> &mut StableGraph<CallTarget, CallKind> {
         &mut self.call_graph
+    }
+
+    pub fn symbol_table_mut(&mut self) -> &mut HashMap<Uuid, NodeIndex> {
+        &mut self.symbol_table
+    }
+
+    pub fn symbol_table(&self) -> &HashMap<Uuid, NodeIndex> {
+        &self.symbol_table
     }
 }
 
 type Result<T> = std::result::Result<T, LoadError>;
 
-pub fn load_elf(elf: Elf<'_>, name: String) -> Result<Program> {
+pub fn load_elf(elf: Elf, name: String) -> Result<Program> {
     log::info!("Non Strippable Symbols : {:?}", &elf.dynsyms.len());
     log::info!("Total Strippable Symbols : {:?}", &elf.syms.len());
 
@@ -83,11 +116,52 @@ pub fn load_elf(elf: Elf<'_>, name: String) -> Result<Program> {
         name
     };
 
-    program.call_graph().add_node(CallTarget::Todo(
+    let entry_uuid = Uuid::new_v4();
+
+    let entry_node_index = program.call_graph_mut().add_node(CallTarget::Todo(
         Rvalue::new_u64(elf_entry),
         Some(name),
-        Uuid::new_v4(),
+        entry_uuid,
     ));
+
+    program
+        .symbol_table_mut()
+        .insert(entry_uuid, entry_node_index);
+
+    let add_sym = |program: &mut Program, sym: &elf::Sym, name: &str| {
+        let name = name.to_string();
+        let addr = sym.st_value;
+        let sym_uuid = Uuid::new_v4();
+        if sym.is_function() {
+            if sym.is_import() {
+                let sym_node_index = program
+                    .call_graph_mut()
+                    .add_node(CallTarget::Symbolic(name, sym_uuid));
+                program.symbol_table_mut().insert(sym_uuid, sym_node_index);
+            } else {
+                let sym_node_index = program.call_graph_mut().add_node(CallTarget::Todo(
+                    Rvalue::new_u64(addr),
+                    Some(name),
+                    sym_uuid,
+                ));
+                program.symbol_table_mut().insert(sym_uuid, sym_node_index);
+            }
+        }
+    };
+
+    //TODO: Resolve import addresses in the binary
+    //
+
+    for sym in &elf.dynsyms {
+        let name = &elf.dynstrtab[sym.st_name];
+        add_sym(&mut program, &sym, name);
+    }
+
+    for sym in &elf.syms {
+        let name = &elf.strtab[sym.st_name];
+
+        add_sym(&mut program, &sym, &name);
+    }
 
     Ok(program)
 }
